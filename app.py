@@ -1,5 +1,3 @@
-
-
 import streamlit as st
 import joblib
 import pickle
@@ -7,10 +5,9 @@ import re
 import os
 import pandas as pd
 import numpy as np
-
+import random
 
 st.set_page_config(page_title="Mindful — Emotional Assistant", layout="wide", page_icon="💛")
-
 
 st.markdown(
     """
@@ -140,7 +137,6 @@ textarea::placeholder, input::placeholder {
 """,
     unsafe_allow_html=True,
 )
-
 
 # ---------------------------
 # SILENT MODEL LOAD (tries common filenames)
@@ -291,11 +287,93 @@ ROUTINES = {
 }
 
 MESSAGES = {
-    "Anxiety":  "Your words show tension and worry. Start with a grounding breath. You’re safe in this moment.",
+    "Anxiety": "Your words show tension and worry. Start with a grounding breath. You’re safe in this moment.",
     "Depression": "There’s a heaviness in your words. Small, gentle actions can slowly help — you matter.",
     "Suicide": "This looks like crisis language. If you are in danger or thinking about harming yourself, contact local emergency services or a crisis hotline immediately.",
     "Calm / Neutral": "Your message seems steady. Keep checking in with small self-care."
 }
+
+# ---------------------------
+# Clinical labels + supportive messages (lists)
+# ---------------------------
+clinical_depression = [
+    ("Self-Blame", "You’re carrying weight that isn’t yours. That’s self-blaming, not truth."),
+    ("Anhedonia", "Nothing feels pleasurable lately — that’s anhedonia, not a sign you’re broken."),
+    ("Rumination", "You’re looping the same thoughts — that’s rumination, not reality."),
+    ("Cognitive Fatigue", "Your thinking feels heavy because your brain is tired — that’s cognitive fatigue."),
+    ("Hopelessness Bias", "Your mind is filtering out brighter possibilities — that’s a bias, not destiny.")
+]
+
+clinical_anxiety = [
+    ("Catastrophizing", "Your mind is jumping to worst-case scenarios — that’s fear, not fact."),
+    ("Threat Sensitivity", "Everything feels dangerous right now — that’s heightened threat sensitivity."),
+    ("Hypervigilance", "You’re scanning for danger nonstop — that’s hypervigilance, not intuition."),
+    ("Racing Thoughts", "Your thoughts are racing — that’s overload, not failure."),
+    ("Uncertainty Intolerance", "Not knowing is hard — that’s anxiety, not a personal flaw.")
+]
+
+clinical_anger = [
+    ("Emotional Flooding", "You’re overwhelmed — that’s emotional flooding, not danger."),
+    ("Frustration Overload", "Your system is overloaded; that heat is frustration, not failure."),
+    ("Cognitive Narrowing", "Anger narrows focus — that’s a reaction, not a choice."),
+    ("Boundary Trigger", "This fire often comes from a crossed boundary, not because you’re 'too much'."),
+    ("Suppressed Resentment", "This may be resentment built up from feeling unheard, not uncontrollable rage.")
+]
+
+clinical_fear = [
+    ("Freeze Response", "Your mind is freezing to protect you — not abandoning you."),
+    ("Sense of Overwhelm", "You feel swamped — that’s overwhelm, not reality collapsing."),
+    ("Safety Seeking", "You’re looking for escape routes — that’s fear, not failure."),
+    ("Future Threat Projection", "You’re imagining threats ahead — that’s projection, not prophecy."),
+    ("Emotional Shock", "Your body is stunned — that’s shock, not brokenness.")
+]
+
+clinical_positive = [
+    ("Stable Grounding", "You’re steady right now — hold this space."),
+    ("Emotional Clarity", "Your mind feels clearer — trust that clarity."),
+    ("Adaptive Thinking", "You’re responding with balance — that’s a healthy pattern."),
+    ("Healthy Regulation", "You’re regulating well — keep honoring your pace."),
+    ("Resilience Mode", "This calm is resilience showing through.")
+]
+
+clinical_labels = {
+    "Depression": clinical_depression,
+    "Anxiety": clinical_anxiety,
+    "Anger": clinical_anger,
+    "Fear / Stress": clinical_fear,
+    "Calm / Neutral": clinical_positive
+}
+
+def get_clinical_message(detected_label):
+    # Map detected_label string to clinical_labels keys
+    if not detected_label:
+        key = "Calm / Neutral"
+    else:
+        dl = detected_label.lower()
+        if "depress" in dl:
+            key = "Depression"
+        elif "anx" in dl:
+            key = "Anxiety"
+        elif "sui" in dl:
+            key = "Suicide" # no dedicated suicide list; we'll fallback
+        elif "ang" in dl or "rage" in dl:
+            key = "Anger"
+        elif "fear" in dl or "stress" in dl:
+            key = "Fear / Stress"
+        elif "calm" in dl or "neutral" in dl:
+            key = "Calm / Neutral"
+        else:
+            key = "Calm / Neutral"
+
+    # If suicide or unknown, fallback to depression/anxiety combos
+    if key == "Suicide":
+        # choose from depression or anxiety lists for supportive messaging
+        pool = clinical_depression + clinical_anxiety
+    else:
+        pool = clinical_labels.get(key, clinical_positive)
+
+    label, msg = random.choice(pool)
+    return label, msg
 
 # ---------------------------
 # UI: Header + input
@@ -330,27 +408,47 @@ st.markdown("") # spacer
 # ---------------------------
 # PROCESS INPUT HIDDENLY
 # ---------------------------
+detected = None
+probs = {"Anxiety":0.0,"Depression":0.0,"Suicide":0.0}
 if user_text.strip():
-    # try model quietly
     probs = predict_with_model(user_text)
     if probs is None:
-        # fallback quietly
         label, fallback_probs = fallback_predict(user_text)
         probs = fallback_probs
         detected = label
     else:
-        # choose label from probs
         detected = max(probs, key=probs.get)
 else:
-    probs = {"Anxiety":0.0,"Depression":0.0,"Suicide":0.0}
     detected = None
 
-# store to history when analyze-like click happens (we'll add when user opens any card)
+# compute emotion score and breakdown for storage
+emotion_score = round(max(probs.values()) if probs else 0.0, 2)
+breakdown = {k.lower(): float(v) for k, v in probs.items()}
+
+# clinical label + message for this detection
+clinical_label, clinical_message = get_clinical_message(detected)
+
+# small insight text (reuse clinical message as insight)
+insight = clinical_message
+
+# store to history when analyze-like click happens
 def save_history_entry():
-    if user_text.strip():
-        entry = {"time": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"), "text": user_text, "detected": detected}
-        if not st.session_state["history"] or st.session_state["history"][0]["text"] != user_text:
-            st.session_state["history"].insert(0, entry)
+    if not user_text.strip():
+        return
+    timestamp = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry = {
+        "time": timestamp,
+        "user_text": user_text,
+        "detected": detected or "Calm / Neutral",
+        "emotion_score": emotion_score,
+        "breakdown": breakdown,
+        "insight_label": clinical_label,
+        "insight_message": clinical_message,
+        "routine": ROUTINES.get(detected, ROUTINES["Calm / Neutral"]),
+    }
+    # avoid duplicate if same text is already top
+    if not st.session_state["history"] or st.session_state["history"][0]["user_text"] != user_text:
+        st.session_state["history"].insert(0, entry)
 
 # ---------------------------
 # CARD CONTENTS (human phrasing)
@@ -363,19 +461,22 @@ else:
     else:
         # compute human metrics
         metrics = input_metrics(user_text)
-        # save history
+        # save history entry
         save_history_entry()
 
         # Emotion card
         if st.session_state["selected"] == "emotion":
-            st.markdown(f"<div class='section'><h2 style='margin-bottom:6px'>Detected feeling</h2><div style='font-size:20px;padding:10px;border-radius:10px;background:linear-gradient(90deg,#ffd8b5,#ffb997);display:inline-block'>{detected}</div><p class='small' style='margin-top:12px'>{MESSAGES.get(detected,'If you feel distressed, reach out to someone you trust.')}</p></div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='section'><h2 style='margin-bottom:6px'>Detected feeling</h2>"
+                f"<div style='font-size:20px;padding:10px;border-radius:10px;background:linear-gradient(90deg,#ffd8b5,#ffb997);display:inline-block'>{detected}</div>"
+                f"<p class='small' style='margin-top:12px'>{MESSAGES.get(detected,'If you feel distressed, reach out to someone you trust.')}</p></div>",
+                unsafe_allow_html=True
+            )
 
         # Breakdown (friendly bars + sentence)
         if st.session_state["selected"] == "breakdown":
             st.markdown("<div class='section'><h2 style='margin-bottom:6px'>How your message sounds</h2></div>", unsafe_allow_html=True)
-            # friendly bar chart
             dfb = pd.DataFrame({"Emotion":["Anxiety","Depression","Suicide"], "Score":[probs.get("Anxiety",0),probs.get("Depression",0),probs.get("Suicide",0)]})
-            # show as simple bars
             st.bar_chart(dfb.set_index("Emotion"))
             top = dfb.loc[dfb["Score"].idxmax()]["Emotion"]
             st.write(f"Overall, this message reads most like **{top}**.")
@@ -399,9 +500,12 @@ else:
             steps = ROUTINES.get(detected, ROUTINES["Calm / Neutral"])
             for s in steps:
                 st.write("• " + s)
-            # warm supportive line
             st.write("")
             st.info("If you feel unsafe at any point, please contact local emergency services or a trusted person immediately.")
+
+            # Clinical label + single supportive sentence (as requested)
+            st.markdown("### 🧠 Clinical Insight")
+            st.write(f"**{clinical_label}:** {clinical_message}")
 
 # ---------------------------
 # bottom: session history (small)
@@ -410,7 +514,43 @@ st.markdown("---")
 st.markdown("**Recent checks (this session)**")
 if st.session_state["history"]:
     for h in st.session_state["history"][:6]:
-        st.markdown(f"- [{h['time']}] **{h['detected']}** — {h['text'][:80]}{'...' if len(h['text'])>80 else ''}")
+        st.markdown(f"- [{h['time']}] **{h['detected']}** — {h['user_text'][:80]}{'...' if len(h['user_text'])>80 else ''}")
 else:
     st.markdown("_You haven't checked anything yet — everything stays in this browser session._")
 
+# ---- FULL SESSION EXPORT (DETAILED) ----
+if st.session_state["history"]:
+
+    export_text = "Mindful Session Report\n"
+    export_text += "=======================\n\n"
+
+    for i, h in enumerate(st.session_state["history"], 1):
+        export_text += f"Entry {i}\n"
+        export_text += f"Time: {h['time']}\n"
+        export_text += f"User Text: {h['user_text']}\n\n"
+
+        export_text += f"Detected Emotion: {h['detected']}\n"
+        export_text += f"Emotion Score: {h.get('emotion_score', '')}\n\n"
+
+        # breakdown (dictionary)
+        export_text += "Breakdown:\n"
+        for k, v in h.get("breakdown", {}).items():
+            export_text += f" - {k}: {v}\n"
+        export_text += "\n"
+
+        export_text += f"Insight Label: {h.get('insight_label','')}\n"
+        export_text += f"Insight Message: {h.get('insight_message','')}\n\n"
+
+        export_text += "Routine & Support:\n"
+        for step in h.get("routine", []):
+            export_text += f" • {step}\n"
+        export_text += "\n"
+
+        export_text += "----------------------------\n\n"
+
+    st.download_button(
+        label="📥 Download Full Session (Detailed)",
+        data=export_text,
+        file_name="mindful_full_session.txt",
+        mime="text/plain",
+    )
