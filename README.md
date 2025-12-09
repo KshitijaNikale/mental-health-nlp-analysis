@@ -22,14 +22,21 @@
 ##Visualizations/ Insights
 
 -Label Distribution: Counts Every Emotion count in dataset
-
-
+[Label](images/label_distribution.png)
 -Text Lenth Distribution: Word Count histogram of text
+[Text](images/text_length_distribution.png)
 -WordClouds: Highlights important and most used words in label
+[WordClouds](images/wordcloud_depression.png)
+[WordClouds](images/wordcloud_suicide.png)
+[WordClouds](images/wordcloud_anxiety.png)
 -Confusion Matrix: Prediction analyiss of model
+[Matrix](images/confusion_matrix.png)
 -F1 Score per Emotion: Performance metrics of model
+[F1](images/f1_score.png)
 -Dataset breakdown pie chart: Class Proportion
+[PieChart](images/pie_chart.png)
 -Emotional Risk Radar: Radar chart comparing word count intensity and sentiment polarity per label
+[Radar](images/emotional-risk_radar.png)
 
 
 
